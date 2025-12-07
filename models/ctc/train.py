@@ -19,7 +19,12 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+# Optimize CPU threading for multi-core
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
+
 import torch
+torch.set_num_threads(4)  # Use multiple cores
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR

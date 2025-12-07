@@ -33,7 +33,9 @@ class TextGeneratorConfig:
     # Character set
     include_letters: bool = True
     include_numbers: bool = True
-    include_punctuation: bool = False  # Most modes don't need
+    include_punctuation: bool = False  # Basic punctuation
+    include_lowercase: bool = False    # For PSK31 conversational
+    include_extended_punct: bool = False  # For RTTY Baudot figures
     
     # Content mix (should sum to 1.0)
     # Balanced for general-purpose decoding with radio capability
@@ -44,6 +46,7 @@ class TextGeneratorConfig:
     word_ratio: float = 0.35          # Real words from dictionary (largest!)
     sentence_ratio: float = 0.15      # Full sentences/phrases
     random_ratio: float = 0.15        # Random character sequences
+    punctuation_ratio: float = 0.00   # Punctuation-heavy samples
     
     # Length settings
     min_length: int = 10
@@ -51,6 +54,47 @@ class TextGeneratorConfig:
     
     # Special patterns
     include_prosigns: bool = True     # AR, SK, BT
+    
+    # Mode-specific character sets
+    mode: str = 'GENERAL'  # CW, PSK31, RTTY, FT8, GENERAL
+
+
+# Mode-specific character sets
+MODE_CHARSETS = {
+    'CW': {
+        'letters': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'numbers': '0123456789',
+        'punctuation': '.,?/-=',
+        'special': ' ',
+    },
+    'PSK31': {
+        # PSK31 Varicode supports full ASCII
+        'letters': 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+        'numbers': '0123456789',
+        'punctuation': '.,?!-/:;()\'\"@#$%&*+=[]{}|\\<>^_`~',
+        'special': ' ',
+    },
+    'RTTY': {
+        # RTTY Baudot has limited character set
+        'letters': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'numbers': '0123456789',
+        'punctuation': '-?:$!&#()\'.+,;/',  # Baudot FIGURES
+        'special': ' ',
+    },
+    'FT8': {
+        # FT8 has very limited character set
+        'letters': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'numbers': '0123456789',
+        'punctuation': '/+-.',
+        'special': ' ',
+    },
+    'GENERAL': {
+        'letters': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'numbers': '0123456789',
+        'punctuation': '.,?!-',
+        'special': ' ',
+    },
+}
 
 
 # Ham radio callsign prefixes by country
@@ -232,20 +276,29 @@ class TextGenerator:
         self._build_charset()
     
     def _build_charset(self):
-        """Build the character set based on config."""
+        """Build the character set based on config and mode."""
         self.charset = set()
         
+        # Get mode-specific character set
+        mode_chars = MODE_CHARSETS.get(self.config.mode, MODE_CHARSETS['GENERAL'])
+        
         if self.config.include_letters:
-            self.charset.update(string.ascii_uppercase)
+            self.charset.update(mode_chars['letters'])
         
         if self.config.include_numbers:
-            self.charset.update(string.digits)
+            self.charset.update(mode_chars['numbers'])
         
-        if self.config.include_punctuation:
-            self.charset.update('.,?!')
+        if self.config.include_punctuation or self.config.include_extended_punct:
+            self.charset.update(mode_chars['punctuation'])
         
-        self.charset.add(' ')
+        if self.config.include_lowercase and 'abcdefghijklmnopqrstuvwxyz' in mode_chars['letters']:
+            self.charset.update(string.ascii_lowercase)
+        
+        self.charset.update(mode_chars['special'])
         self.charset = sorted(self.charset)
+        
+        # Store mode-specific chars for coverage
+        self.mode_punctuation = mode_chars['punctuation']
     
     def generate_callsign(self) -> str:
         """
@@ -437,6 +490,116 @@ class TextGenerator:
                     )))
             return ' '.join(parts)
     
+    def generate_punctuation_text(self) -> str:
+        """
+        Generate text with heavy punctuation usage.
+        Only uses punctuation valid for the current mode.
+        """
+        punct = self.mode_punctuation
+        patterns = []
+        
+        # Build patterns based on available punctuation
+        if '?' in punct:
+            patterns.append(lambda: "WHAT? HOW? WHY?")
+            patterns.append(lambda: "QRZ? QTH? QSL?")
+        
+        if '!' in punct:
+            patterns.append(lambda: "HELLO! YES! OK!")
+            patterns.append(lambda: "GREAT! THANKS!")
+        
+        if '(' in punct and ')' in punct:
+            patterns.append(lambda: "SIGNAL (GOOD) HERE")
+            patterns.append(lambda: "FREQ (7040) KHZ")
+        
+        if ':' in punct:
+            patterns.append(lambda: "TIME: 1430 UTC")
+            patterns.append(lambda: "RST: 599")
+        
+        if ',' in punct:
+            patterns.append(lambda: "A, B, C, D")
+            patterns.append(lambda: "YES, NO, MAYBE")
+        
+        if '.' in punct:
+            patterns.append(lambda: "HELLO. GOODBYE.")
+            patterns.append(lambda: "1. FIRST 2. SECOND")
+        
+        if '+' in punct:
+            patterns.append(lambda: "5+3 10+4")
+        
+        if '-' in punct:
+            patterns.append(lambda: "10-4 OVER-OUT")
+        
+        if '/' in punct:
+            patterns.append(lambda: "W1ABC/P PORTABLE")
+            patterns.append(lambda: "YES/NO AND/OR")
+        
+        if "'" in punct:
+            patterns.append(lambda: "IT'S JOHN'S")
+            patterns.append(lambda: "DON'T CAN'T")
+        
+        if '$' in punct:
+            patterns.append(lambda: "PRICE $50 $100")
+        
+        if '#' in punct:
+            patterns.append(lambda: "#1 #2 #3")
+        
+        if '&' in punct:
+            patterns.append(lambda: "A&B C&D")
+        
+        if ';' in punct:
+            patterns.append(lambda: "HELLO; GOODBYE")
+        
+        # Always add random punctuation sequence
+        if punct:
+            patterns.append(lambda: ' '.join(random.choices(list(punct), k=random.randint(3, 6))))
+        
+        if not patterns:
+            return "NO PUNCTUATION"
+        
+        return random.choice(patterns)()
+    
+    def generate_lowercase_text(self) -> str:
+        """
+        Generate mixed-case conversational text.
+        For modes like PSK31 that support lowercase.
+        """
+        patterns = [
+            # Natural conversational
+            "Hello, how are you today?",
+            "Thanks for the contact, 73!",
+            "The weather here is nice and sunny.",
+            "I'm using a dipole antenna.",
+            "What's your QTH?",
+            "Nice to meet you!",
+            "Can you hear me okay?",
+            "Let's try again later.",
+            "Good luck in the contest!",
+            "See you on the bands.",
+            # Technical with mixed case
+            "Running 100w into a Yagi.",
+            "Signal is 5/9 here!",
+            "Using FLdigi for PSK31.",
+            "My rig is an Icom IC-7300.",
+            "Antenna is at 40 feet.",
+            # Casual chat
+            "Hi there, first time on PSK31.",
+            "Great signal, very clean!",
+            "Sorry, QRM here.",
+            "Will QSL via LoTW.",
+            "Take care, bye for now.",
+        ]
+        
+        text = random.choice(patterns)
+        
+        # Sometimes add random case variations
+        if random.random() < 0.3:
+            text = ''.join(
+                c.lower() if random.random() < 0.5 else c.upper()
+                for c in text
+            )
+        
+        return text
+    
     def generate_one(self) -> str:
         """
         Generate a single text sample based on configured ratios.
@@ -447,12 +610,20 @@ class TextGenerator:
         # Words (largest ratio - general language)
         cumulative += self.config.word_ratio
         if r < cumulative:
-            return self.generate_word_text()
+            text = self.generate_word_text()
+            # For PSK31, sometimes convert to lowercase
+            if self.config.include_lowercase and random.random() < 0.3:
+                text = text.lower()
+            return text
         
         # Sentences (natural language)
         cumulative += self.config.sentence_ratio
         if r < cumulative:
-            return self.generate_sentence_text()
+            text = self.generate_sentence_text()
+            # For PSK31, sometimes use mixed case
+            if self.config.include_lowercase and random.random() < 0.5:
+                return self.generate_lowercase_text()
+            return text
         
         # Callsign (radio-specific)
         cumulative += self.config.callsign_ratio
@@ -463,6 +634,11 @@ class TextGenerator:
         cumulative += self.config.random_ratio
         if r < cumulative:
             return self.generate_random_text()
+        
+        # Punctuation (mode-specific)
+        cumulative += self.config.punctuation_ratio
+        if r < cumulative:
+            return self.generate_punctuation_text()
         
         # Numbers
         cumulative += self.config.number_ratio
@@ -511,6 +687,7 @@ class TextGenerator:
         """
         Generate samples that ensure all characters appear.
         Also ensures common bigrams are represented.
+        Mode-specific to cover all supported characters.
         """
         coverage_samples = []
         
@@ -521,9 +698,10 @@ class TextGenerator:
                 coverage_samples.append(f"{char} {char} {char}")
         
         # Bigram coverage (important pairs)
+        letters = [c for c in self.charset if c.isalpha()]
         important_pairs = []
-        for c1 in string.ascii_uppercase[:10]:  # First 10 letters
-            for c2 in string.ascii_uppercase[:10]:
+        for c1 in letters[:10]:  # First 10 letters
+            for c2 in letters[:10]:
                 important_pairs.append(f"{c1}{c2}")
         
         # Add some of these
@@ -533,6 +711,45 @@ class TextGenerator:
         # All digits
         coverage_samples.append('0 1 2 3 4 5 6 7 8 9')
         coverage_samples.append('0123456789')
+        
+        # Mode-specific punctuation coverage
+        if self.mode_punctuation:
+            # Each punctuation mark in context
+            for p in self.mode_punctuation:
+                coverage_samples.append(f"A{p}B {p} C{p}D")
+            
+            # Only add context samples with characters valid for this mode
+            if '?' in self.mode_punctuation and '!' in self.mode_punctuation:
+                coverage_samples.append(f"HELLO? YES! OK")
+            if ':' in self.mode_punctuation and '$' in self.mode_punctuation:
+                coverage_samples.append(f"PRICE: $50")
+            if '(' in self.mode_punctuation and ')' in self.mode_punctuation:
+                coverage_samples.append(f"SIGNAL (GOOD)")
+            if '/' in self.mode_punctuation:
+                coverage_samples.append(f"A/B W1ABC/P")
+            if '+' in self.mode_punctuation:
+                coverage_samples.append(f"C+D 5+3")
+            if '-' in self.mode_punctuation:
+                coverage_samples.append(f"E-F 10-4")
+            if "'" in self.mode_punctuation:
+                coverage_samples.append(f"IT'S JOHN'S")
+            if ':' in self.mode_punctuation:
+                coverage_samples.append(f"TIME: 14:30")
+            if '#' in self.mode_punctuation:
+                coverage_samples.append(f"#1 #2 #3")
+            if '&' in self.mode_punctuation:
+                coverage_samples.append(f"A&B C&D")
+        
+        # Lowercase coverage for PSK31
+        if self.config.include_lowercase:
+            for char in string.ascii_lowercase:
+                coverage_samples.append(f"{char} {char} {char}")
+            
+            # Mixed case patterns
+            coverage_samples.append("Hello World")
+            coverage_samples.append("The Quick Brown Fox")
+            coverage_samples.append("abcdefghijklm nopqrstuvwxyz")
+            coverage_samples.append("AaBbCcDdEeFf")
         
         # Prosigns if enabled
         if self.config.include_prosigns:
@@ -579,6 +796,7 @@ def generate_texts_for_mode(
     Generate texts optimized for a specific mode.
     
     All modes include general language capability with mode-specific additions.
+    Each mode uses its full supported character set.
     
     Args:
         mode: 'CW', 'PSK31', 'RTTY', 'FT8', 'GENERAL'
@@ -590,65 +808,95 @@ def generate_texts_for_mode(
     configs = {
         # General-purpose: balanced for any audio source
         'GENERAL': TextGeneratorConfig(
+            mode='GENERAL',
             word_ratio=0.40,           # Natural language
             sentence_ratio=0.20,       # Full sentences
             callsign_ratio=0.10,       # Some radio
             number_ratio=0.10,         # Numbers
             random_ratio=0.15,         # Adversarial
+            punctuation_ratio=0.00,
             qcode_ratio=0.03,
             abbreviation_ratio=0.02,
-            include_prosigns=False
+            include_prosigns=False,
+            include_punctuation=False,
+            include_lowercase=False,
         ),
-        # CW: Mix of radio and general
+        # CW: Mix of radio and general, limited punctuation
         'CW': TextGeneratorConfig(
+            mode='CW',
             word_ratio=0.30,           # General language
             sentence_ratio=0.15,       # Full sentences
             callsign_ratio=0.20,       # Radio callsigns
             number_ratio=0.10,         # Numbers
             random_ratio=0.15,         # Adversarial
+            punctuation_ratio=0.00,
             qcode_ratio=0.05,
             abbreviation_ratio=0.05,
-            include_prosigns=True
+            include_prosigns=True,
+            include_punctuation=True,  # CW has .,?/-=
+            include_lowercase=False,
         ),
-        # PSK31: More conversational
+        # PSK31: Conversational with full ASCII (lowercase + punctuation)
         'PSK31': TextGeneratorConfig(
-            word_ratio=0.35,           # More conversational
+            mode='PSK31',
+            word_ratio=0.25,           # General language
             sentence_ratio=0.20,       # Full sentences
-            callsign_ratio=0.15,
-            number_ratio=0.10,
-            random_ratio=0.10,
+            callsign_ratio=0.15,       # Radio callsigns
+            number_ratio=0.08,         # Numbers
+            random_ratio=0.12,         # Adversarial
+            punctuation_ratio=0.10,    # Punctuation-heavy samples
             qcode_ratio=0.05,
-            abbreviation_ratio=0.05
+            abbreviation_ratio=0.05,
+            include_prosigns=False,
+            include_punctuation=True,  # Full ASCII punctuation
+            include_lowercase=True,    # PSK31 is conversational
+            include_extended_punct=True,
         ),
-        # RTTY: News/teletype style
+        # RTTY: News/teletype style with Baudot figures
         'RTTY': TextGeneratorConfig(
-            word_ratio=0.25,
-            sentence_ratio=0.25,       # More headline-style
-            callsign_ratio=0.15,
-            number_ratio=0.15,
-            random_ratio=0.10,
+            mode='RTTY',
+            word_ratio=0.20,           # Natural language
+            sentence_ratio=0.20,       # Headlines
+            callsign_ratio=0.15,       # Radio callsigns
+            number_ratio=0.15,         # Numbers with figures
+            random_ratio=0.10,         # Adversarial
+            punctuation_ratio=0.10,    # Baudot figures (!#$&'()+,-./:;?)
             qcode_ratio=0.05,
-            abbreviation_ratio=0.05
+            abbreviation_ratio=0.05,
+            include_prosigns=False,
+            include_punctuation=True,  # Baudot FIGURES
+            include_lowercase=False,   # RTTY is uppercase only
+            include_extended_punct=True,
         ),
-        # FT8: Highly structured (mostly callsigns)
+        # FT8: Highly structured (mostly callsigns), minimal punctuation
         'FT8': TextGeneratorConfig(
+            mode='FT8',
             callsign_ratio=0.45,       # FT8 is callsign-heavy
             number_ratio=0.25,         # Grid squares, signal reports
             word_ratio=0.10,
             sentence_ratio=0.05,
             random_ratio=0.10,
-            qcode_ratio=0.03,
-            abbreviation_ratio=0.02
+            punctuation_ratio=0.03,    # Just /+-.
+            qcode_ratio=0.02,
+            abbreviation_ratio=0.00,
+            include_prosigns=False,
+            include_punctuation=True,
+            include_lowercase=False,
         ),
         # VOICE: For speech-to-text, mostly natural language
         'VOICE': TextGeneratorConfig(
+            mode='GENERAL',
             word_ratio=0.35,
             sentence_ratio=0.40,       # Natural speech
             number_ratio=0.10,
             random_ratio=0.10,
+            punctuation_ratio=0.00,
             callsign_ratio=0.03,
             qcode_ratio=0.01,
-            abbreviation_ratio=0.01
+            abbreviation_ratio=0.01,
+            include_prosigns=False,
+            include_punctuation=False,
+            include_lowercase=False,
         ),
     }
     
