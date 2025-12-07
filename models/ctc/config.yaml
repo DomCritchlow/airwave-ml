@@ -1,0 +1,50 @@
+# CTC-based Audio-to-Text Model
+# Architecture: CNN + Transformer Encoder (no decoder) + CTC loss
+#
+# This model uses:
+# - CTC alignment (no teacher forcing)
+# - Single-pass decoding (no autoregressive)
+# - No language model (pure pattern matching)
+#
+# Best for:
+# - Call signs (W1ABC) - no hallucination
+# - Exact character transcription
+# - Fast inference
+# - Smaller model (~1.6M params with matched config)
+
+model:
+  hidden_dim: 192           # Match attention model for fair comparison
+  num_layers: 3             # Encoder layers only
+  dropout: 0.1
+  encoder_type: "transformer"  # or "lstm"
+  nhead: 6
+  # Total: ~1.6M parameters (2x smaller than attention)
+
+audio:
+  sample_rate: 16000
+  n_mels: 80
+  n_fft: 400
+  hop_length: 160
+
+training:
+  batch_size: 16
+  epochs: 100
+  learning_rate: 0.0003
+  num_workers: 0
+
+data:
+  max_audio_len: 2000
+  max_text_len: 200
+
+early_stopping:
+  patience: 10
+  min_delta: 0.001
+
+paths:
+  data_dir: ../../data/synthetic/morse_v1
+  checkpoint_dir: checkpoints
+  log_dir: logs
+
+# Vocabulary (BLANK token added automatically at index 0)
+vocab: " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+

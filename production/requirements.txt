@@ -1,0 +1,12 @@
+# Production decoder dependencies
+# (in addition to main requirements.txt)
+
+# Microphone input
+sounddevice>=0.4.6
+
+# Web API server (optional)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+websockets>=11.0
+
