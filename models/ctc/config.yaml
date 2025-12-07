@@ -13,12 +13,12 @@
 # - Smaller model (~1.6M params with matched config)
 
 model:
-  hidden_dim: 192           # Match attention model for fair comparison
-  num_layers: 3             # Encoder layers only
-  dropout: 0.1
+  hidden_dim: 128           # Smaller for 2000 samples
+  num_layers: 2             # Fewer layers to prevent overfitting
+  dropout: 0.15             # Slightly higher regularization
   encoder_type: "transformer"  # or "lstm"
-  nhead: 6
-  # Total: ~1.6M parameters (2x smaller than attention)
+  nhead: 4
+  # Total: ~500K parameters (right-sized for small dataset)
 
 audio:
   sample_rate: 16000
@@ -46,5 +46,6 @@ paths:
   log_dir: logs
 
 # Vocabulary (BLANK token added automatically at index 0)
-vocab: " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# Includes: space, hyphen, digits, question mark, A-Z
+vocab: " -0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
