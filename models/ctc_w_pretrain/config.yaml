@@ -1,0 +1,53 @@
+# CTC Model with Pretraining Support
+# 
+# Tiny variant designed for:
+# 1. Masked spectrogram pretraining (self-supervised)
+# 2. Efficient fine-tuning on labeled data
+#
+# Use with:
+#   python pretrain_masked_ctc_w_pretrain.py --data-dirs ... --save-path checkpoints/pretrained.pt
+#   python train.py --pretrained-encoder checkpoints/pretrained.pt
+
+model:
+  hidden_dim: 128           # Smaller than main CTC (128 vs 256)
+  num_layers: 2             # Fewer layers (2 vs 4)
+  dropout: 0.1
+  encoder_type: "transformer"
+  nhead: 4
+  # Total: ~300K parameters
+
+audio:
+  sample_rate: 16000
+  n_mels: 80
+  n_fft: 400
+  hop_length: 160
+
+training:
+  batch_size: 32
+  epochs: 50                # Fewer epochs with pretrained weights
+  learning_rate: 0.0005
+  num_workers: 0
+
+data:
+  max_audio_len: 2000
+  max_text_len: 200
+
+# Audio augmentation
+augmentation:
+  enabled: true
+  prob_mp3_compression: 0.3
+  prob_bandpass: 0.3
+  prob_noise: 0.4
+  prob_volume: 0.3
+  prob_lowpass: 0.2
+
+early_stopping:
+  patience: 10
+  min_delta: 0.002
+
+paths:
+  data_dir: ../../data/synthetic/morse_v2
+  checkpoint_dir: checkpoints
+
+vocab: " -0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+

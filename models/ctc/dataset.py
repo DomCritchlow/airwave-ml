@@ -17,6 +17,8 @@ from torch.nn.utils.rnn import pad_sequence
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 
+from augmentation import AudioAugmenter, create_augmenter_from_config
+
 
 def create_ctc_vocab(config: dict) -> Tuple[Dict[str, int], Dict[int, str]]:
     """
@@ -58,12 +60,16 @@ class CTCAudioTextDataset(Dataset):
         audio_paths: List[str],
         text_paths: List[str],
         char_to_idx: Dict[str, int],
-        config: dict
+        config: dict,
+        augmenter: Optional[AudioAugmenter] = None,
+        is_training: bool = True
     ):
         self.audio_paths = audio_paths
         self.text_paths = text_paths
         self.char_to_idx = char_to_idx
         self.config = config
+        self.augmenter = augmenter
+        self.is_training = is_training
         
         # Audio config
         audio_cfg = config.get('audio', {})
@@ -101,6 +107,10 @@ class CTCAudioTextDataset(Dataset):
         # Convert to mono
         if waveform.shape[0] > 1:
             waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Apply augmentation (only during training)
+        if self.is_training and self.augmenter is not None:
+            waveform = self.augmenter(waveform)
         
         # Extract mel spectrogram
         mel = self.mel_transform(waveform)
@@ -214,9 +224,25 @@ def load_ctc_dataset(
     
     print(f"Train: {len(train_audio)}, Val: {len(val_audio)}")
     
-    # Create datasets
-    train_dataset = CTCAudioTextDataset(train_audio, train_text, char_to_idx, config)
-    val_dataset = CTCAudioTextDataset(val_audio, val_text, char_to_idx, config)
+    # Create augmenter for training
+    audio_cfg = config.get('audio', {})
+    sample_rate = audio_cfg.get('sample_rate', 16000)
+    augmenter = create_augmenter_from_config(config, sample_rate)
+    
+    if augmenter:
+        print("Audio augmentation: ENABLED")
+    else:
+        print("Audio augmentation: DISABLED")
+    
+    # Create datasets (augmentation only for training)
+    train_dataset = CTCAudioTextDataset(
+        train_audio, train_text, char_to_idx, config,
+        augmenter=augmenter, is_training=True
+    )
+    val_dataset = CTCAudioTextDataset(
+        val_audio, val_text, char_to_idx, config,
+        augmenter=None, is_training=False  # No augmentation for validation
+    )
     
     # Create dataloaders
     train_cfg = config.get('training', {})

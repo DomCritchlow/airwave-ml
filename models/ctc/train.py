@@ -9,7 +9,7 @@ Key differences from seq2seq training:
 - Simpler training loop
 
 Usage:
-    python src_ctc/train.py --config config_ctc.yaml
+    python train.py --config config.yaml
 """
 
 import os
@@ -27,11 +27,23 @@ import torch
 torch.set_num_threads(4)  # Use multiple cores
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import OneCycleLR
+from torch.utils.tensorboard import SummaryWriter
 import yaml
+
+# Rich for beautiful terminal output
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from rich.live import Live
+from rich.layout import Layout
+from rich import box
 
 from model import CTCModel, create_ctc_model
 from dataset import load_ctc_dataset, create_ctc_vocab
+
+console = Console()
 
 
 def decode_prediction(pred_tokens: list, idx_to_char: dict) -> str:
@@ -80,9 +92,12 @@ def train_epoch(
     model: CTCModel,
     train_loader,
     optimizer,
+    scheduler,
     ctc_loss,
     device,
-    epoch: int
+    epoch: int,
+    progress,
+    task_id
 ) -> float:
     """Train for one epoch."""
     model.train()
@@ -108,7 +123,6 @@ def train_epoch(
         
         # Check for NaN
         if torch.isnan(loss):
-            print(f"Warning: NaN loss at batch {batch_idx}, skipping...")
             continue
         
         # Backward pass
@@ -118,13 +132,13 @@ def train_epoch(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         
         optimizer.step()
+        scheduler.step()  # OneCycleLR steps per batch
         
         total_loss += loss.item()
         num_batches += 1
         
-        # Progress update
-        if batch_idx % 10 == 0:
-            print(f"  Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}")
+        # Update progress bar
+        progress.update(task_id, advance=1, loss=f"{loss.item():.3f}")
     
     return total_loss / max(num_batches, 1)
 
@@ -218,9 +232,89 @@ def save_checkpoint(
     }, path)
 
 
+def create_header_panel(config, num_params, device, epochs, learning_rate, patience):
+    """Create the header panel with training info."""
+    info_table = Table(show_header=False, box=None, padding=(0, 2))
+    info_table.add_column(style="cyan")
+    info_table.add_column(style="white")
+    info_table.add_column(style="cyan")
+    info_table.add_column(style="white")
+    
+    info_table.add_row(
+        "Device:", str(device),
+        "Parameters:", f"{num_params:,}"
+    )
+    info_table.add_row(
+        "Epochs:", str(epochs),
+        "Learning Rate:", f"{learning_rate:.1e}"
+    )
+    info_table.add_row(
+        "Batch Size:", str(config.get('training', {}).get('batch_size', 16)),
+        "Early Stop:", f"{patience} epochs"
+    )
+    
+    return Panel(
+        info_table,
+        title="[bold white]CTC Morse Decoder Training[/bold white]",
+        border_style="blue",
+        box=box.ROUNDED
+    )
+
+
+def create_metrics_table(history):
+    """Create the metrics table."""
+    table = Table(box=box.SIMPLE, header_style="bold cyan")
+    table.add_column("Epoch", justify="right", style="dim")
+    table.add_column("Train Loss", justify="right")
+    table.add_column("Val Loss", justify="right")
+    table.add_column("CER", justify="right")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("LR", justify="right", style="dim")
+    table.add_column("Time", justify="right", style="dim")
+    table.add_column("", justify="center")
+    
+    # Show last 10 epochs
+    for h in history[-10:]:
+        cer_style = "green" if h['cer'] < 0.3 else "yellow" if h['cer'] < 0.6 else "red"
+        acc_style = "green" if h['acc'] > 70 else "yellow" if h['acc'] > 40 else "red"
+        
+        table.add_row(
+            f"{h['epoch']}/{h['total']}",
+            f"{h['train_loss']:.4f}",
+            f"{h['val_loss']:.4f}",
+            f"[{cer_style}]{h['cer']:.2%}[/{cer_style}]",
+            f"[{acc_style}]{h['acc']:.1f}%[/{acc_style}]",
+            f"{h['lr']:.1e}",
+            f"{h['time']:.0f}s",
+            "✓" if h['is_best'] else ""
+        )
+    
+    return table
+
+
+def create_samples_panel(sample_preds, sample_targets):
+    """Create the sample predictions panel."""
+    samples = []
+    for i in range(min(2, len(sample_preds))):
+        target = sample_targets[i][:50]
+        pred = sample_preds[i][:50]
+        match = "✓" if target == pred else "✗"
+        samples.append(f"[dim]Target:[/dim] [white]{target}[/white]")
+        samples.append(f"[dim]Pred:[/dim]   [yellow]{pred}[/yellow] {match}")
+        if i < min(2, len(sample_preds)) - 1:
+            samples.append("")
+    
+    return Panel(
+        "\n".join(samples) if samples else "[dim]No samples yet[/dim]",
+        title="[bold]Sample Predictions[/bold]",
+        border_style="dim",
+        box=box.ROUNDED
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description='Train CTC audio-to-text model')
-    parser.add_argument('--config', '-c', type=str, default='config_ctc.yaml',
+    parser.add_argument('--config', '-c', type=str, default='config.yaml',
                        help='Path to config file')
     parser.add_argument('--resume', '-r', type=str, default=None,
                        help='Path to checkpoint to resume from')
@@ -229,45 +323,11 @@ def main():
     # Load config
     config_path = Path(args.config)
     if not config_path.exists():
-        print(f"Config not found: {config_path}")
-        print("Creating default CTC config...")
-        # Will be created below
+        console.print(f"[red]Config not found: {config_path}[/red]")
+        sys.exit(1)
     
-    if config_path.exists():
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-    else:
-        # Default config
-        config = {
-            'model': {
-                'hidden_dim': 256,
-                'num_layers': 4,
-                'dropout': 0.1,
-                'encoder_type': 'transformer',
-                'nhead': 4
-            },
-            'audio': {
-                'sample_rate': 16000,
-                'n_mels': 80,
-                'n_fft': 400,
-                'hop_length': 160
-            },
-            'training': {
-                'batch_size': 16,
-                'epochs': 100,
-                'learning_rate': 0.0003,
-                'num_workers': 0
-            },
-            'data': {
-                'max_audio_len': 2000,
-                'max_text_len': 200
-            },
-            'paths': {
-                'data_dir': 'morse_synthetic',
-                'checkpoint_dir': 'checkpoints_ctc'
-            },
-            'vocab': ' 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        }
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
     
     # Setup device
     if torch.cuda.is_available():
@@ -277,27 +337,23 @@ def main():
     else:
         device = torch.device('cpu')
     
-    print(f"Using device: {device}")
-    
     # Load data
     data_dir = config.get('paths', {}).get('data_dir', 'morse_synthetic')
-    print(f"\nLoading data from: {data_dir}")
     
-    train_loader, val_loader, char_to_idx, idx_to_char = load_ctc_dataset(
-        data_dir, config
-    )
+    with console.status("[bold blue]Loading dataset...", spinner="dots"):
+        train_loader, val_loader, char_to_idx, idx_to_char = load_ctc_dataset(
+            data_dir, config
+        )
     
     vocab_size = len(char_to_idx)
-    print(f"Vocab size: {vocab_size}")
     
     # Create model
-    print("\nCreating CTC model...")
-    model = create_ctc_model(config, vocab_size)
-    model = model.to(device)
+    with console.status("[bold blue]Creating model...", spinner="dots"):
+        model = create_ctc_model(config, vocab_size)
+        model = model.to(device)
     
     # Count parameters
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model parameters: {num_params:,}")
     
     # Training setup
     train_cfg = config.get('training', {})
@@ -305,21 +361,40 @@ def main():
     epochs = train_cfg.get('epochs', 100)
     
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    
+    # OneCycleLR: warmup -> peak -> gradual decay (better for CTC)
+    # pct_start=0.1 means 10% warmup, div_factor=25 means start at LR/25
+    steps_per_epoch = len(train_loader)
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=learning_rate,
+        epochs=epochs,
+        steps_per_epoch=steps_per_epoch,
+        pct_start=0.1,           # 10% warmup
+        div_factor=25,           # Start LR = max_lr/25
+        final_div_factor=1000,   # End LR = max_lr/1000 (not too low)
+        anneal_strategy='cos'
+    )
     
     # CTC loss (blank_idx=0)
     ctc_loss = nn.CTCLoss(blank=0, reduction='mean', zero_infinity=True)
     
     # Checkpoint directory
-    ckpt_dir = Path(config.get('paths', {}).get('checkpoint_dir', 'checkpoints_ctc'))
+    ckpt_dir = Path(config.get('paths', {}).get('checkpoint_dir', 'checkpoints'))
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+    
+    # TensorBoard setup
+    run_name = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_dir = Path('runs') / f'ctc_{run_name}'
+    writer = SummaryWriter(log_dir)
+    writer.add_text('Config', f"```yaml\n{yaml.dump(config, default_flow_style=False)}```")
     
     # Resume from checkpoint
     start_epoch = 0
     best_cer = float('inf')
     
     if args.resume and Path(args.resume).exists():
-        print(f"\nResuming from: {args.resume}")
+        console.print(f"[yellow]Resuming from: {args.resume}[/yellow]")
         checkpoint = torch.load(args.resume, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -333,68 +408,80 @@ def main():
     min_delta = config.get('early_stopping', {}).get('min_delta', 0.001)
     epochs_no_improve = 0
     
-    print("\n" + "=" * 60)
-    print("STARTING CTC TRAINING")
-    print("=" * 60)
-    print(f"Epochs: {epochs}")
-    print(f"Batch size: {train_cfg.get('batch_size', 16)}")
-    print(f"Learning rate: {learning_rate}")
-    print(f"Early stopping patience: {patience}")
-    print("=" * 60 + "\n")
+    # Print header
+    console.print()
+    console.print(create_header_panel(config, num_params, device, epochs, learning_rate, patience))
+    console.print(f"[dim]TensorBoard: tensorboard --logdir {log_dir.parent}[/dim]")
+    console.print()
+    
+    # Training history
+    history = []
+    sample_preds = []
+    sample_targets = []
     
     start_time = time.time()
     
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         
-        print(f"Epoch {epoch + 1}/{epochs}")
-        print("-" * 40)
-        
-        # Train
-        train_loss = train_epoch(model, train_loader, optimizer, ctc_loss, device, epoch)
+        # Training with progress bar
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]Epoch {task.fields[epoch]}/{task.fields[total_epochs]}"),
+            BarColumn(bar_width=30),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("loss: {task.fields[loss]}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(
+                "Training",
+                total=len(train_loader),
+                epoch=epoch + 1,
+                total_epochs=epochs,
+                loss="--"
+            )
+            train_loss = train_epoch(model, train_loader, optimizer, scheduler, ctc_loss, device, epoch, progress, task)
         
         # Validate
         val_loss, val_cer, sample_preds, sample_targets = validate(
             model, val_loader, ctc_loss, device, idx_to_char
         )
         
-        # Update learning rate
-        scheduler.step()
+        # Get current learning rate (scheduler steps per batch now)
         current_lr = optimizer.param_groups[0]['lr']
         
         epoch_time = time.time() - epoch_start
         
-        # Print results
-        print(f"\nEpoch {epoch + 1} Summary:")
-        print(f"  Train Loss: {train_loss:.4f}")
-        print(f"  Val Loss: {val_loss:.4f}")
-        print(f"  Val CER: {val_cer:.4f} ({(1 - val_cer) * 100:.1f}% accuracy)")
-        print(f"  LR: {current_lr:.6f}")
-        print(f"  Time: {epoch_time:.1f}s")
+        # TensorBoard logging
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('CER/val', val_cer, epoch)
+        writer.add_scalar('Accuracy/val', (1 - val_cer) * 100, epoch)
+        writer.add_scalar('LearningRate', current_lr, epoch)
         
-        # Sample predictions
-        print("\nSample Predictions:")
-        for i in range(min(3, len(sample_preds))):
-            print(f"  Target: {sample_targets[i][:50]}")
-            print(f"  Pred:   {sample_preds[i][:50]}")
-            print()
+        # Log sample predictions to TensorBoard
+        samples_text = [f"**Target:** `{t[:60]}`  \n**Pred:** `{p[:60]}`" 
+                       for t, p in zip(sample_targets[:3], sample_preds[:3])]
+        if samples_text:
+            writer.add_text('Predictions', '\n\n---\n\n'.join(samples_text), epoch)
         
-        # Save checkpoint
+        # Check if best
         is_best = val_cer < best_cer - min_delta
         
+        # Save checkpoint
         if is_best:
             best_cer = val_cer
             epochs_no_improve = 0
-            
             save_checkpoint(
                 model, optimizer, scheduler, epoch,
                 val_loss, val_cer, config, char_to_idx, idx_to_char,
                 ckpt_dir / 'best_model_ctc.pt'
             )
-            print(f"✓ New best model saved (CER: {val_cer:.4f})")
         else:
             epochs_no_improve += 1
-            print(f"No improvement for {epochs_no_improve}/{patience} epochs")
         
         # Regular checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
@@ -404,26 +491,65 @@ def main():
                 ckpt_dir / f'checkpoint_epoch_{epoch + 1}.pt'
             )
         
+        # Add to history
+        history.append({
+            'epoch': epoch + 1,
+            'total': epochs,
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'cer': val_cer,
+            'acc': (1 - val_cer) * 100,
+            'lr': current_lr,
+            'time': epoch_time,
+            'is_best': is_best
+        })
+        
+        # Display metrics table and samples
+        console.print(create_metrics_table(history))
+        console.print(create_samples_panel(sample_preds, sample_targets))
+        console.print()
+        
         # Early stopping
         if epochs_no_improve >= patience:
-            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            console.print(f"[yellow]Early stopping after {epoch + 1} epochs[/yellow]")
             break
-        
-        print()
     
     total_time = time.time() - start_time
     hours, remainder = divmod(total_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     
-    print("=" * 60)
-    print("TRAINING COMPLETE")
-    print("=" * 60)
-    print(f"Total time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
-    print(f"Best CER: {best_cer:.4f} ({(1 - best_cer) * 100:.1f}% accuracy)")
-    print(f"Checkpoints saved to: {ckpt_dir}")
-    print("=" * 60)
+    # Close TensorBoard writer
+    writer.add_hparams(
+        {
+            'hidden_dim': config['model']['hidden_dim'],
+            'num_layers': config['model']['num_layers'],
+            'lr': learning_rate,
+            'batch_size': train_cfg.get('batch_size', 16),
+        },
+        {
+            'hparam/best_cer': best_cer,
+            'hparam/best_accuracy': (1 - best_cer) * 100,
+        }
+    )
+    writer.close()
+    
+    # Final summary
+    summary = Table(show_header=False, box=None)
+    summary.add_column(style="cyan")
+    summary.add_column(style="white")
+    summary.add_row("Total Time", f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
+    summary.add_row("Best CER", f"{best_cer:.2%}")
+    summary.add_row("Best Accuracy", f"{(1 - best_cer) * 100:.1f}%")
+    summary.add_row("Checkpoints", str(ckpt_dir))
+    summary.add_row("TensorBoard", str(log_dir))
+    
+    console.print(Panel(
+        summary,
+        title="[bold green]Training Complete[/bold green]",
+        border_style="green",
+        box=box.ROUNDED
+    ))
 
 
 if __name__ == '__main__':
     main()
-

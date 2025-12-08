@@ -1,24 +1,16 @@
 # CTC-based Audio-to-Text Model
 # Architecture: CNN + Transformer Encoder (no decoder) + CTC loss
 #
-# This model uses:
-# - CTC alignment (no teacher forcing)
-# - Single-pass decoding (no autoregressive)
-# - No language model (pure pattern matching)
-#
-# Best for:
-# - Call signs (W1ABC) - no hallucination
-# - Exact character transcription
-# - Fast inference
-# - Smaller model (~1.6M params with matched config)
+# Robust model for real-world morse decoding
+# Trained with heavy augmentation for generalization
 
 model:
-  hidden_dim: 128           # Smaller for 2000 samples
-  num_layers: 2             # Fewer layers to prevent overfitting
-  dropout: 0.15             # Slightly higher regularization
-  encoder_type: "transformer"  # or "lstm"
-  nhead: 4
-  # Total: ~500K parameters (right-sized for small dataset)
+  hidden_dim: 256           # Larger for complex patterns
+  num_layers: 4             # Deeper for better representations
+  dropout: 0.1              # Standard regularization
+  encoder_type: "transformer"
+  nhead: 8                  # More attention heads
+  # Total: ~2M parameters
 
 audio:
   sample_rate: 16000
@@ -27,25 +19,38 @@ audio:
   hop_length: 160
 
 training:
-  batch_size: 16
-  epochs: 100
-  learning_rate: 0.0003
-  num_workers: 0
+  batch_size: 32            # Larger batch for stability
+  epochs: 150               # More epochs for larger dataset
+  learning_rate: 0.0005     # Slightly higher LR
+  num_workers: 4            # Parallel data loading
 
 data:
   max_audio_len: 2000
   max_text_len: 200
 
+# Audio augmentation for robust training
+# Forces model to learn Morse patterns, not audio characteristics
+augmentation:
+  enabled: true
+  prob_mp3_compression: 0.3   # Simulate lossy compression
+  prob_bandpass: 0.3          # Simulate radio bandwidth
+  prob_time_stretch: 0.2      # Speed variations
+  prob_pitch_shift: 0.2       # Frequency variations
+  prob_noise: 0.4             # Various noise types
+  prob_volume: 0.3            # Volume variations
+  prob_clipping: 0.1          # Overdriven audio
+  prob_lowpass: 0.2           # Poor audio quality
+  prob_reverb: 0.1            # Room acoustics
+
 early_stopping:
-  patience: 10
-  min_delta: 0.001
+  patience: 15                # More patience with augmentation
+  min_delta: 0.002            # Require 0.2% CER improvement
 
 paths:
-  data_dir: ../../data/synthetic/morse_v1
+  data_dir: ../../data/synthetic/morse_v2
   checkpoint_dir: checkpoints
   log_dir: logs
 
 # Vocabulary (BLANK token added automatically at index 0)
-# Includes: space, hyphen, digits, question mark, A-Z
 vocab: " -0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
