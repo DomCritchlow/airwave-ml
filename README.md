@@ -1,6 +1,18 @@
-# airwave-ml
+<p align="center">
+  <img src="assets/logo.svg" alt="airwave-ml" width="600">
+</p>
 
-Machine learning for decoding radio audio — Morse code, digital modes, and beyond.
+<p align="center">
+  <strong>Machine learning for decoding radio audio — Morse code, digital modes, and beyond.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.9+-3776ab?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-ee4c2c?logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
+
+---
 
 ## Features
 

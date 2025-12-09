@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Simple app icon: wave with nodes -->
+  
+  <!-- Wave path connecting nodes -->
+  <path 
+    d="M 24 64 Q 44 24, 64 64 Q 84 104, 104 64" 
+    fill="none" 
+    stroke="#000" 
+    stroke-width="6" 
+    stroke-linecap="round"
+  />
+  
+  <!-- Nodes at key points -->
+  <circle cx="24" cy="64" r="10" fill="#000"/>
+  <circle cx="64" cy="64" r="10" fill="#000"/>
+  <circle cx="104" cy="64" r="10" fill="#000"/>
+  
+  <!-- Small accent nodes at wave peaks -->
+  <circle cx="44" cy="34" r="5" fill="#000" opacity="0.5"/>
+  <circle cx="84" cy="94" r="5" fill="#000" opacity="0.5"/>
+</svg>
+
