@@ -179,8 +179,15 @@ def main(args):
     print(f"Model from epoch {checkpoint['epoch']}")
     print(f"Vocabulary size: {len(vocab)}")
     
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
+    # Set device (auto-detect best available, or use specified)
+    if args.device:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     print(f"Using device: {device}")
     
     # Get input dimension from config
@@ -249,8 +256,8 @@ if __name__ == '__main__':
                         help='Use beam search instead of greedy decoding')
     parser.add_argument('--beam_width', type=int, default=5,
                         help='Beam width for beam search')
-    parser.add_argument('--cpu', action='store_true',
-                        help='Force CPU usage')
+    parser.add_argument('--device', type=str, choices=['cpu', 'cuda', 'mps'],
+                        help='Device to use (auto-detect if not specified)')
     
     args = parser.parse_args()
     main(args)

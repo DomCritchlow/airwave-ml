@@ -183,26 +183,54 @@ def create_directories(config):
     print(f"Created directories: {config['paths']['checkpoint_dir']}, {config['paths']['log_dir']}")
 
 
-def setup_logging(config):
+def setup_logging(config, run_name=None):
     """Setup tensorboard logging if enabled."""
-    if config['logging']['use_tensorboard']:
+    if config.get('logging', {}).get('use_tensorboard', True):
         try:
             from torch.utils.tensorboard import SummaryWriter
-            log_dir = Path(config['paths']['log_dir']) / datetime.now().strftime('%Y%m%d_%H%M%S')
+            if run_name is None:
+                run_name = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_dir = Path(config['paths']['log_dir']) / f'attention_{run_name}'
             writer = SummaryWriter(log_dir)
+            
+            # Log config
+            writer.add_text('Config', f"```yaml\n{yaml.dump(config, default_flow_style=False)}```")
+            
             print(f"TensorBoard logging enabled: {log_dir}")
-            return writer
+            return writer, log_dir
         except ImportError:
             print("TensorBoard not available, logging disabled")
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 def log_metrics(writer, metrics, step, prefix='train'):
     """Log metrics to tensorboard."""
     if writer is not None:
         for key, value in metrics.items():
-            writer.add_scalar(f'{prefix}/{key}', value, step)
+            # Use consistent naming: Loss/train, Accuracy/val, etc.
+            metric_name = key.replace('_', ' ').title().replace(' ', '')
+            writer.add_scalar(f'{metric_name}/{prefix}', value, step)
+
+
+def log_hparams(writer, config, best_val_loss, best_wer, total_epochs, total_time):
+    """Log hyperparameters and final metrics."""
+    if writer is not None:
+        writer.add_hparams(
+            {
+                'd_model': config['model']['d_model'],
+                'encoder_layers': config['model']['num_encoder_layers'],
+                'decoder_layers': config['model']['num_decoder_layers'],
+                'lr': config['training']['learning_rate'],
+                'batch_size': config['training']['batch_size'],
+            },
+            {
+                'hparam/best_val_loss': best_val_loss,
+                'hparam/best_wer': best_wer if best_wer is not None else 0,
+                'hparam/total_epochs': total_epochs,
+                'hparam/total_time_min': total_time / 60,
+            }
+        )
 
 
 def print_sample_predictions(model, val_loader, idx_to_char, device, num_samples=3):

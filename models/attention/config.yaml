@@ -31,22 +31,45 @@ training:
   batch_size: 16
   epochs: 100
   learning_rate: 0.0001
+  weight_decay: 0.01
   warmup_epochs: 5
-  num_workers: 0
+  scheduler: "cosine"
+  num_workers: 4
 
 data:
   max_audio_len: 2000
   max_text_len: 200
 
+# Audio augmentation
+augmentation:
+  enabled: true
+  prob_mp3_compression: 0.3
+  prob_bandpass: 0.3
+  prob_time_stretch: 0.2
+  prob_pitch_shift: 0.2
+  prob_noise: 0.4
+  prob_volume: 0.3
+  prob_clipping: 0.1
+  prob_lowpass: 0.2
+  prob_reverb: 0.1
+
 early_stopping:
   enabled: true
-  patience: 7
+  patience: 10
   min_delta: 0.001
 
+checkpoint:
+  save_every: 10
+  save_best: true
+
+logging:
+  use_tensorboard: true
+  log_every: 50
+
 paths:
-  data_dir: ../../data/synthetic/morse_v1
+  data_dir: ../../data/synthetic/morse_v2
   checkpoint_dir: checkpoints
-  log_dir: logs
+  log_dir: runs
 
-vocab: " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
+# Vocabulary
+vocab: " -0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ"

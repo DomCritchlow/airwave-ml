@@ -6,74 +6,103 @@ Organized training data for audio-to-text models.
 
 ```
 data/
-├── synthetic/           # Machine-generated audio/text pairs
-│   ├── morse_v1/       # Original synthetic Morse (1000 samples)
-│   └── morse_v2/       # Improved text diversity (to be generated)
+├── synthetic/              # Machine-generated audio/text pairs
+│   ├── morse_v1/          # Original Morse (2,000 samples)
+│   ├── morse_v2/          # Large-scale Morse (20,000 samples)
+│   ├── psk31_v1/          # PSK31 digital mode (2,000 samples)
+│   └── rtty_v1/           # RTTY digital mode (2,000 samples)
 │
-├── real_world/          # Real radio recordings
-│   ├── morse_data/
-│   │   ├── raw/        # Full episode downloads
-│   │   └── chunked/    # Chunked into training samples
-│   └── scripts/        # Download/processing scripts
+├── real_world/             # Real radio recordings
+│   └── morse_data/
+│       ├── raw/           # Full episode downloads
+│       ├── chunked/       # 10-second training samples (901 chunks)
+│       └── scripts/       # Download/processing scripts
 │
-└── detector/            # Signal detector training data
-    └── spectrograms/    # Labeled waterfall images
+└── detector/               # Signal detector training data
+    └── spectrograms/       # Labeled waterfall images
 ```
 
 ## Synthetic Data
 
-Generated with `scripts/generate_morse_data.py`
+### Morse Code
 
-### `morse_v1/` - Original
-- 1000 samples
-- Basic word list
-- Variable operator timing
+| Dataset | Samples | Characters | Description |
+|---------|---------|------------|-------------|
+| `morse_v1/` | 2,000 | 39 | Basic operator variability |
+| `morse_v2/` | 20,000 | 39 | Full variability, augmentation-ready |
 
-### `morse_v2/` - Improved (to be generated)
-- 2000+ samples
-- Rich text diversity:
-  - Call signs (W1ABC, K3XYZ)
-  - Q-codes (QTH, QSL)
-  - Numbers, frequencies
-  - General language
-  - Adversarial patterns
+**Features:**
+- Variable WPM (18-32)
+- Operator "fist" simulation (timing variance, drift)
+- Background noise
+- Key-click artifacts
 
-To generate:
+**Generate:**
 ```bash
 python scripts/generate_morse_data.py \
     --output_dir data/synthetic/morse_v2 \
+    --num_samples 20000
+```
+
+### PSK31
+
+| Dataset | Samples | Characters | Description |
+|---------|---------|------------|-------------|
+| `psk31_v1/` | 2,000 | 95 | Full ASCII (Varicode) |
+
+**Features:**
+- BPSK at 31.25 baud
+- Varicode encoding
+- QSB fading simulation
+- SNR variation
+
+**Generate:**
+```bash
+python scripts/generate_psk31_data.py \
+    --output_dir data/synthetic/psk31_v1 \
     --num_samples 2000
 ```
 
-## Real World Data
+### RTTY
 
-From RSS podcast feeds of Morse code news.
+| Dataset | Samples | Characters | Description |
+|---------|---------|------------|-------------|
+| `rtty_v1/` | 2,000 | 52 | Baudot (letters + figures) |
+
+**Features:**
+- FSK at 45.45 baud (170 Hz shift)
+- Baudot encoding with LTRS/FIGS shifts
+- Timing jitter
+- Noise injection
+
+**Generate:**
+```bash
+python scripts/generate_rtty_data.py \
+    --output_dir data/synthetic/rtty_v1 \
+    --num_samples 2000
+```
+
+## Real-World Data
+
+From RSS podcast feeds of Morse code news broadcasts.
 
 ### Collection
+
 ```bash
 python data/real_world/scripts/download_morse_data.py full-pipeline \
     --output_dir data/real_world/morse_data
 ```
 
 ### Chunking
-Audio is chunked into 10-second segments with 2-second overlap for training.
 
-## Detector Data
+Audio is automatically chunked into:
+- 10-second segments
+- 2-second overlap
+- 16kHz mono WAV
 
-For training the signal detector CNN.
-
-Generated with `universal_decoder/detector/generate_detector_data.py`
-
-Contains labeled spectrograms with:
-- Signal bounding boxes
-- Mode classifications (CW, PSK31, RTTY, FT8, SSB)
-
-To generate:
-```bash
-python universal_decoder/detector/generate_detector_data.py \
-    --output data/detector \
-    --num-samples 5000
-```
+**Current stats:**
+- 901 labeled chunks
+- Transcripts from broadcast scripts
 
 ## Data Format
 
@@ -81,13 +110,54 @@ All datasets follow the same format:
 
 ```
 dataset_name/
-├── audio/           # WAV files (16kHz mono)
+├── audio/              # WAV files (16kHz mono)
 │   ├── sample_00000.wav
 │   ├── sample_00001.wav
 │   └── ...
-├── text/            # Matching text files
+├── text/               # Matching text files
 │   ├── sample_00000.txt
 │   └── ...
-└── metadata.json    # Sample info (duration, WPM, etc.)
+└── metadata.json       # Sample info (duration, WPM, etc.)
 ```
 
+### Metadata Schema
+
+```json
+{
+  "id": "morse_00000",
+  "text": "CQ CQ DE W1ABC",
+  "duration": 4.5,
+  "wpm": 25,
+  "frequency": 600,
+  "noise_level": 0.05
+}
+```
+
+## Character Sets
+
+| Mode | Characters | Count |
+|------|------------|-------|
+| Morse | `SPACE - 0-9 ? A-Z` | 39 |
+| PSK31 | Full ASCII (printable) | 95 |
+| RTTY | `A-Z 0-9 SPACE` + Baudot figures | 52 |
+
+## Using Custom Data
+
+To add your own data:
+
+1. Create directory structure:
+   ```
+   data/synthetic/my_dataset/
+   ├── audio/
+   └── text/
+   ```
+
+2. Add paired files:
+   - `audio/sample_00000.wav` (16kHz mono)
+   - `text/sample_00000.txt` (uppercase text)
+
+3. Update model config:
+   ```yaml
+   paths:
+     data_dir: ../../data/synthetic/my_dataset
+   ```

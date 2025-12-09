@@ -8,6 +8,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import argparse
 from pathlib import Path
+from datetime import datetime
 import time
 import os
 from tqdm import tqdm
@@ -22,7 +23,7 @@ from model import AudioToTextModel, count_parameters
 from utils import (
     load_config, save_config, save_checkpoint, load_checkpoint,
     AverageMeter, get_lr, create_directories, setup_logging,
-    log_metrics, print_sample_predictions, format_time,
+    log_metrics, log_hparams, print_sample_predictions, format_time,
     decode_sequence, calculate_wer
 )
 
@@ -163,8 +164,13 @@ def main(args):
     # Save config
     save_config(config, Path(config['paths']['checkpoint_dir']) / 'config.yaml')
     
-    # Set device
-    device = torch.device(config['device'] if torch.cuda.is_available() else 'cpu')
+    # Set device (auto-detect best available)
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     print(f"Using device: {device}")
     
     # Load dataset
@@ -232,7 +238,8 @@ def main(args):
         start_epoch += 1
     
     # Setup logging
-    writer = setup_logging(config)
+    run_name = args.run_name or datetime.now().strftime('%Y%m%d_%H%M%S')
+    writer, log_dir = setup_logging(config, run_name)
     
     # Training loop
     print(f"\nStarting training for {config['training']['epochs']} epochs...")
@@ -312,26 +319,39 @@ def main(args):
         print("=" * 80)
     
     total_time = time.time() - start_time
-    print(f"\nTraining completed in {format_time(total_time)}")
-    print(f"Best validation loss: {best_val_loss:.4f}")
+    
+    # Log hyperparameters
+    log_hparams(writer, config, best_val_loss, None, epoch + 1, total_time)
     
     # Close tensorboard writer
     if writer:
         writer.close()
+    
+    print("\n" + "=" * 60)
+    print("TRAINING COMPLETE")
+    print("=" * 60)
+    print(f"Total time: {format_time(total_time)}")
+    print(f"Best validation loss: {best_val_loss:.4f}")
+    print(f"Checkpoints: {Path(config['paths']['checkpoint_dir']).absolute()}")
+    if log_dir:
+        print(f"TensorBoard: {log_dir}")
+    print("=" * 60)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train audio-to-text model')
-    parser.add_argument('--config', type=str, default='config.yaml',
+    parser = argparse.ArgumentParser(description='Train attention-based audio-to-text model')
+    parser.add_argument('--config', '-c', type=str, default='config.yaml',
                         help='Path to config file')
-    parser.add_argument('--data_dir', type=str, default=None,
-                        help='Path to data directory (overrides config)')
+    parser.add_argument('--resume', '-r', type=str, default=None,
+                        help='Path to checkpoint to resume from')
+    parser.add_argument('--data-dir', type=str, default=None,
+                        help='Override data directory from config')
     parser.add_argument('--epochs', type=int, default=None,
                         help='Number of epochs (overrides config)')
-    parser.add_argument('--batch_size', type=int, default=None,
+    parser.add_argument('--batch-size', type=int, default=None,
                         help='Batch size (overrides config)')
-    parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from')
+    parser.add_argument('--run-name', type=str, default=None,
+                        help='Name for this run (used in logs)')
     
     args = parser.parse_args()
     main(args)

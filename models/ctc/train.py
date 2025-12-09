@@ -318,6 +318,10 @@ def main():
                        help='Path to config file')
     parser.add_argument('--resume', '-r', type=str, default=None,
                        help='Path to checkpoint to resume from')
+    parser.add_argument('--data-dir', type=str, default=None,
+                       help='Override data directory from config')
+    parser.add_argument('--run-name', type=str, default=None,
+                       help='Name for this run (used in logs and checkpoints)')
     args = parser.parse_args()
     
     # Load config
@@ -328,6 +332,13 @@ def main():
     
     with open(config_path) as f:
         config = yaml.safe_load(f)
+    
+    # Override config with command line args
+    if args.data_dir:
+        config.setdefault('paths', {})['data_dir'] = args.data_dir
+    
+    # Run name for logging
+    run_name = args.run_name or datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # Setup device
     if torch.cuda.is_available():
@@ -384,7 +395,6 @@ def main():
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     
     # TensorBoard setup
-    run_name = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = Path('runs') / f'ctc_{run_name}'
     writer = SummaryWriter(log_dir)
     writer.add_text('Config', f"```yaml\n{yaml.dump(config, default_flow_style=False)}```")

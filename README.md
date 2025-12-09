@@ -1,50 +1,49 @@
 # airwave-ml
 
-Machine learning for decoding radio audio — Morse, digital modes, and beyond.
+Machine learning for decoding radio audio — Morse code, digital modes, and beyond.
 
 ## Features
 
-- **Two model architectures**: Attention-based seq2seq and CTC
+- **Multiple model architectures**: CTC, CTC with pretraining, Attention-based seq2seq
 - **Universal signal decoder**: Detect and decode multiple radio modes
 - **Synthetic data generation**: Realistic training data with operator variability
+- **Audio augmentation**: MP3 compression, noise, bandpass, time-stretch for robust models
 - **Production deployment**: CLI, API, and streaming support
 
 ## Repository Structure
 
 ```
 airwave-ml/
-├── models/                  # Model architectures
-│   ├── attention/          # Seq2Seq Transformer (encoder-decoder)
-│   │   ├── model.py
-│   │   ├── train.py
-│   │   ├── config.yaml
-│   │   └── checkpoints/
-│   └── ctc/                # CTC model (encoder-only)
-│       ├── model.py
-│       ├── train.py
-│       ├── config.yaml
-│       └── checkpoints/
+├── models/                      # Model architectures
+│   ├── ctc/                    # CTC model (encoder-only, recommended)
+│   ├── ctc_w_pretrain/         # CTC with masked spectrogram pretraining
+│   └── attention/              # Seq2Seq Transformer (encoder-decoder)
 │
-├── data/                    # Training data
-│   ├── synthetic/          # Generated audio/text pairs
-│   │   ├── morse_v1/      # 1000 samples
-│   │   └── morse_v2/      # Improved diversity
-│   ├── real_world/         # Real radio recordings
-│   └── detector/           # Signal detector data
+├── data/                        # Training data
+│   ├── synthetic/
+│   │   ├── morse_v2/           # 20,000 Morse samples
+│   │   ├── psk31_v1/           # 2,000 PSK31 samples
+│   │   └── rtty_v1/            # 2,000 RTTY samples
+│   └── real_world/
+│       └── morse_data/         # Real radio recordings
 │
-├── universal_decoder/       # Multi-mode radio decoder
-│   ├── detector/           # Signal detection CNN
-│   ├── extractor/          # Bandpass filtering
-│   ├── decoders/           # Mode-specific decoders
-│   └── pipeline/           # Orchestration
+├── scripts/                     # Data generation
+│   ├── generate_morse_data.py  # Morse code generator
+│   ├── generate_psk31_data.py  # PSK31 generator
+│   ├── generate_rtty_data.py   # RTTY generator
+│   └── generate_training_text.py
 │
-├── production/              # Deployment code
-│   ├── live_decode.py      # CLI decoder
-│   └── api_server.py       # REST/WebSocket API
+├── universal_decoder/           # Multi-mode radio decoder
+│   ├── detector/               # Signal detection CNN
+│   ├── extractor/              # Bandpass filtering
+│   ├── decoders/               # Mode-specific decoders
+│   └── pipeline/               # Orchestration
 │
-└── scripts/                 # Data generation & utilities
-    ├── generate_morse_data.py
-    └── generate_training_text.py
+├── production/                  # Deployment code
+│   ├── live_decode.py          # CLI decoder
+│   └── api_server.py           # REST/WebSocket API
+│
+└── pretrain_masked_ctc_w_pretrain.py  # Self-supervised pretraining
 ```
 
 ## Quick Start
@@ -52,15 +51,27 @@ airwave-ml/
 ### 1. Setup Environment
 
 ```bash
-./setup_env.sh
+python -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 2. Generate Training Data
 
 ```bash
+# Morse code (20,000 samples with operator variability)
 python scripts/generate_morse_data.py \
     --output_dir data/synthetic/morse_v2 \
+    --num_samples 20000
+
+# PSK31
+python scripts/generate_psk31_data.py \
+    --output_dir data/synthetic/psk31_v1 \
+    --num_samples 2000
+
+# RTTY
+python scripts/generate_rtty_data.py \
+    --output_dir data/synthetic/rtty_v1 \
     --num_samples 2000
 ```
 
@@ -72,50 +83,86 @@ cd models/ctc
 python train.py --config config.yaml
 ```
 
-**Attention (for natural language):**
+**CTC with Pretraining (best for limited labeled data):**
 ```bash
-cd models/attention
-python train.py --config config.yaml
+# Step 1: Pretrain encoder on unlabeled audio
+python pretrain_masked_ctc_w_pretrain.py \
+    --data-dirs data/synthetic/morse_v2/audio \
+    --epochs 50 \
+    --save-path models/ctc_w_pretrain/checkpoints/pretrained_encoder.pt
+
+# Step 2: Fine-tune with CTC loss
+cd models/ctc_w_pretrain
+python train.py --config config.yaml \
+    --pretrained-encoder checkpoints/pretrained_encoder.pt
 ```
 
 ### 4. Decode Audio
 
 ```bash
-python production/live_decode.py \
-    --checkpoint models/ctc/checkpoints/best_model_ctc.pt \
-    --source mic
+cd models/ctc
+python inference.py \
+    --checkpoint checkpoints/best_model_ctc.pt \
+    --audio path/to/audio.wav
+```
+
+### 5. Monitor Training
+
+```bash
+tensorboard --logdir models/ctc/runs
+# Open http://localhost:6006
 ```
 
 ## Model Comparison
 
-| Feature | Attention | CTC |
-|---------|-----------|-----|
-| Parameters | 3.4M | 1.6M |
-| Training speed | 1x | 1.5-2x |
-| Call signs | May hallucinate | ✅ Exact |
-| Language context | ✅ Yes | No |
-| Best for | Natural language | Radio/technical |
+| Model | Params | Best For | Training |
+|-------|--------|----------|----------|
+| **CTC** | ~2M | Morse, call signs, exact transcription | Supervised |
+| **CTC + Pretrain** | ~300K | Limited labeled data, domain adaptation | Self-supervised → Supervised |
+| **Attention** | ~3.4M | Natural language, context-aware | Supervised |
 
-## Architecture
+## Training Features
 
-### Attention Model (Seq2Seq)
-```
-Audio → CNN → Transformer Encoder → Cross-Attention → Decoder → Text
-```
+### Audio Augmentation
 
-### CTC Model
-```
-Audio → CNN → Transformer Encoder → Linear → CTC Loss → Text
-```
+The training pipeline includes robust augmentation:
+- MP3 compression simulation
+- Bandpass filtering (radio bandwidth)
+- Noise injection (white, pink, band-limited)
+- Time stretching and pitch shifting
+- Volume variations and clipping
 
-### Universal Decoder
-```
-Wideband Audio → Signal Detector → Extractor → Mode Router → Decoders → Text
-```
+### Logging
+
+All models log to TensorBoard:
+- Loss curves (train/val)
+- CER and accuracy
+- Learning rate
+- Sample predictions
+- Hyperparameters
+
+### Early Stopping
+
+Training automatically stops when validation CER plateaus (configurable patience).
+
+## Results
+
+### CTC Model on Morse Code
+
+| Dataset | Samples | Accuracy |
+|---------|---------|----------|
+| Synthetic (morse_v2) | 20,000 | 97.8% |
+| Real-world (fine-tuned) | 901 | ~65% |
+
+### With Pretraining
+
+Pretraining reduces required epochs by ~3x and improves generalization to real-world audio.
 
 ## Documentation
 
-- `models/README.md` - Model architectures
+- `models/ctc/README.md` - CTC model details
+- `models/ctc_w_pretrain/README.md` - Pretraining approach
+- `models/attention/README.md` - Attention model
 - `data/README.md` - Data organization
 - `universal_decoder/README.md` - Multi-mode decoder
 - `production/README.md` - Deployment
@@ -123,9 +170,9 @@ Wideband Audio → Signal Detector → Extractor → Mode Router → Decoders �
 ## Requirements
 
 - Python 3.9+
-- PyTorch
-- torchaudio
-- NumPy, SciPy
+- PyTorch >= 2.0
+- torchaudio >= 2.0
+- NumPy, SciPy, librosa
 
 See `requirements.txt` for full list.
 

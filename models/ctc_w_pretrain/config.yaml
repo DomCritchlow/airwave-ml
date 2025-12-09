@@ -26,7 +26,7 @@ training:
   batch_size: 32
   epochs: 50                # Fewer epochs with pretrained weights
   learning_rate: 0.0005
-  num_workers: 0
+  num_workers: 4
 
 data:
   max_audio_len: 2000
@@ -37,9 +37,13 @@ augmentation:
   enabled: true
   prob_mp3_compression: 0.3
   prob_bandpass: 0.3
+  prob_time_stretch: 0.2
+  prob_pitch_shift: 0.2
   prob_noise: 0.4
   prob_volume: 0.3
+  prob_clipping: 0.1
   prob_lowpass: 0.2
+  prob_reverb: 0.1
 
 early_stopping:
   patience: 10
@@ -48,6 +52,7 @@ early_stopping:
 paths:
   data_dir: ../../data/synthetic/morse_v2
   checkpoint_dir: checkpoints
+  log_dir: runs
 
+# Vocabulary (BLANK token added automatically at index 0)
 vocab: " -0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-

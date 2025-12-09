@@ -204,6 +204,10 @@ def main():
                        help='Path to pretrained encoder checkpoint')
     parser.add_argument('--freeze-epochs', type=int, default=0,
                        help='Number of epochs to freeze encoder')
+    parser.add_argument('--data-dir', type=str, default=None,
+                       help='Override data directory from config')
+    parser.add_argument('--run-name', type=str, default=None,
+                       help='Name for this run (used in checkpoint filenames)')
     args = parser.parse_args()
     
     # Load config
@@ -258,8 +262,11 @@ def main():
     
     print(f"Using device: {device}")
     
-    # Load data
-    data_dir = config.get('paths', {}).get('data_dir', '../../data/synthetic/morse_v2')
+    # Load data (allow command-line override)
+    if args.data_dir:
+        data_dir = args.data_dir
+    else:
+        data_dir = config.get('paths', {}).get('data_dir', '../../data/synthetic/morse_v2')
     print(f"\nLoading data from: {data_dir}")
     
     train_loader, val_loader, char_to_idx, idx_to_char = load_ctc_dataset(data_dir, config)
@@ -315,10 +322,27 @@ def main():
     ckpt_dir = Path(config.get('paths', {}).get('checkpoint_dir', 'checkpoints'))
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     
+    # Run name for checkpoints
+    if args.run_name:
+        run_name = args.run_name
+        model_name = f'best_model_{run_name}.pt'
+    else:
+        run_name = datetime.now().strftime('%Y%m%d_%H%M%S')
+        model_name = 'best_model.pt'
+    
     # TensorBoard
-    run_name = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_dir = Path('runs') / f'ctc_pretrain_{run_name}'
+    log_dir = Path('runs') / f'ctc_{run_name}'
     writer = SummaryWriter(log_dir)
+    
+    # Log config and run info
+    writer.add_text('Config', f"```yaml\n{yaml.dump(config, default_flow_style=False)}```")
+    writer.add_text('RunInfo', f"""
+**Run Name:** {run_name}
+**Data Dir:** {data_dir}
+**Pretrained Encoder:** {args.pretrained_encoder or 'None'}
+**Resume From:** {args.resume or 'None'}
+**Freeze Epochs:** {args.freeze_epochs}
+""")
     
     # Resume
     start_epoch = 0
@@ -410,6 +434,15 @@ def main():
         writer.add_scalar('CER/val', val_cer, epoch)
         writer.add_scalar('Accuracy/val', (1 - val_cer) * 100, epoch)
         writer.add_scalar('LearningRate', current_lr, epoch)
+        writer.add_scalar('Time/epoch_seconds', epoch_time, epoch)
+        
+        # Log sample predictions to TensorBoard
+        if sample_preds and sample_targets:
+            samples_text = [
+                f"**Target:** `{t[:60]}`  \n**Pred:** `{p[:60]}`"
+                for t, p in zip(sample_targets[:3], sample_preds[:3])
+            ]
+            writer.add_text('Predictions', '\n\n---\n\n'.join(samples_text), epoch)
         
         # Check best
         is_best = val_cer < best_cer - min_delta
@@ -420,7 +453,7 @@ def main():
             save_checkpoint(
                 model, optimizer, scheduler, epoch,
                 val_loss, val_cer, config, char_to_idx, idx_to_char,
-                ckpt_dir / 'best_model.pt'
+                ckpt_dir / model_name
             )
         else:
             epochs_no_improve += 1
@@ -492,6 +525,24 @@ def main():
             )
     
     total_time = time.time() - start_time
+    
+    # Log hyperparameters and final metrics
+    writer.add_hparams(
+        {
+            'hidden_dim': config['model']['hidden_dim'],
+            'num_layers': config['model']['num_layers'],
+            'lr': train_cfg.get('learning_rate', 0.0005),
+            'batch_size': train_cfg.get('batch_size', 32),
+            'pretrained': args.pretrained_encoder is not None,
+            'data_dir': data_dir,
+        },
+        {
+            'hparam/best_cer': best_cer,
+            'hparam/best_accuracy': (1 - best_cer) * 100,
+            'hparam/total_epochs': epoch + 1,
+            'hparam/total_time_min': total_time / 60,
+        }
+    )
     writer.close()
     
     print("\n" + "=" * 60)
@@ -500,6 +551,7 @@ def main():
     print(f"Total time: {total_time / 60:.1f} minutes")
     print(f"Best CER: {best_cer:.2%} ({(1 - best_cer) * 100:.1f}% accuracy)")
     print(f"Checkpoints: {ckpt_dir}")
+    print(f"TensorBoard: {log_dir}")
     print("=" * 60)
 
 
