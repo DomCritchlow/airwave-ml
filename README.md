@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="assets/icon.svg" alt="airwave-ml logo" width="80">
+</p>
+
+<p align="center">
   <img src="assets/logo.svg" alt="airwave-ml" width="600">
 </p>
 
