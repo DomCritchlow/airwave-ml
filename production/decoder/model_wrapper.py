@@ -8,12 +8,9 @@ import sys
 from pathlib import Path
 
 # Add model directories to path for imports
-# New structure: models/attention/ and models/ctc/
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'models' / 'attention'))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'models' / 'ctc'))
-# Legacy paths (for backwards compatibility)
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src_ctc'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'models' / 'ctc_w_pretrain'))
 
 import torch
 import torchaudio
@@ -64,7 +61,7 @@ class MorseDecoder:
         self.model_type = checkpoint.get('model_type', 'seq2seq')
         print(f"Model type: {self.model_type}")
         
-        if self.model_type == 'ctc':
+        if self.model_type in ('ctc', 'ctc_w_pretrain'):
             self._load_ctc_model(checkpoint)
         else:
             self._load_seq2seq_model(checkpoint)
@@ -185,7 +182,7 @@ class MorseDecoder:
         
         # Inference (different for CTC vs seq2seq)
         with torch.no_grad():
-            if self.model_type == 'ctc':
+            if self.model_type in ('ctc', 'ctc_w_pretrain'):
                 pred_seq = self._decode_ctc(features, length, use_beam_search, beam_width)
             else:
                 pred_seq = self._decode_seq2seq(features, length, use_beam_search, beam_width)
